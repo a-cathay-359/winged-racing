@@ -6,7 +6,6 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>3D 竞速 · WebGL 赛车</title>
 <style>
-  /* ---------- 全局：彻底禁止选中 / 长按菜单 / 双指缩放 ---------- */
   * {
     -webkit-user-select: none;
     -moz-user-select: none;
@@ -114,7 +113,6 @@
   #result { display: none; font-size: 15px; color: #cfe3ff; line-height: 2.1; margin-bottom: 24px; }
   #result b { color: #ffd23f; }
 
-  /* ---------- 触屏按钮 ---------- */
   #touchPad { display: none; }
   @media (pointer: coarse) { #touchPad { display: block; } }
 
@@ -134,15 +132,12 @@
   .tbtn.active { background: rgba(120,200,255,.35); border-color: rgba(160,220,255,.7); }
   .tbtn.disabled { opacity: .32; filter: grayscale(1); }
 
-  /* 左下：方向 */
   #tLeft  { left: 16px;  bottom: 100px; width: 70px; height: 70px; }
   #tRight { left: 100px; bottom: 100px; width: 70px; height: 70px; }
 
-  /* 右下：油门 / 刹车 */
   #tGas   { right: 16px;  bottom: 100px; width: 78px; height: 78px; font-size: 15px; }
   #tBrake { right: 104px; bottom: 100px; width: 64px; height: 64px; font-size: 15px; }
 
-  /* 右上：漂移（主） + 氮气（副），位于小地图下方 */
   #tDrift {
     right: 14px; top: 182px; width: 76px; height: 76px;
     font-size: 13px; letter-spacing: 1px;
@@ -549,6 +544,9 @@ const player = {
   roll: 0, pitch: 0,
   offTrack: false,
   drifting: false,
+  // 转向状态（新增：两级惯性）
+  steerAngle: 0,   // 当前方向盘角度 -1..1
+  yawRate: 0,      // 当前偏航角速度 rad/s
 };
 
 const AI_COLORS = [0xe8453c, 0x3b82f6, 0x9b59b6];
@@ -587,7 +585,7 @@ window.addEventListener('keyup', e => { keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 
 // ============================================================
-//  触屏按钮 —— 带 pointer capture，防误释放 / 防选中
+//  触屏按钮 —— pointer capture，防误释放 / 防选中
 // ============================================================
 (function bindTouch() {
   const map = {
@@ -618,19 +616,16 @@ window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; }
       el.classList.remove('active');
     };
 
-    // 用 pointer 事件统一处理鼠标 / 触摸 / 触控笔
     el.addEventListener('pointerdown', press, { passive: false });
     el.addEventListener('pointerup', release, { passive: false });
     el.addEventListener('pointercancel', release, { passive: false });
     el.addEventListener('lostpointercapture', release);
-    // 兜底：某些浏览器在 pointercancel 后不触发 up
     el.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
     el.addEventListener('touchend', e => e.preventDefault(), { passive: false });
     el.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
   }
 })();
 
-// canvas 上禁止长按选中 / 滚动
 ['touchstart', 'touchmove', 'touchend'].forEach(ev => {
   glCanvas.addEventListener(ev, e => e.preventDefault(), { passive: false });
 });
@@ -674,6 +669,8 @@ function startRace() {
   player.vx = 0; player.vz = 0;
   player.vF = 0; player.vS = 0;
   player.roll = 0; player.pitch = 0;
+  player.steerAngle = 0;
+  player.yawRate = 0;
 
   game.running = true;
   game.finished = false;
@@ -737,14 +734,32 @@ function updatePlayer(dt) {
 
   const fx0 = Math.sin(p.heading), fz0 = Math.cos(p.heading);
   const vF0 = p.vx * fx0 + p.vz * fz0;
-
-  const steer = (steerL ? 1 : 0) - (steerR ? 1 : 0);
   const spAbs = Math.abs(vF0);
-  let turnRate = 1.35 * (1 - 0.48 * Math.min(1, spAbs / 55));
-  if (handbrake) turnRate *= 1.55;
-  const authority = Math.min(1, spAbs / 5);
-  p.heading += steer * turnRate * authority * Math.sign(vF0 || 1) * dt;
 
+  // ---------- ① 方向盘：输入平滑（打方向有过渡，回正更快） ----------
+  const steerTarget = (steerL ? 1 : 0) - (steerR ? 1 : 0);
+  {
+    const returning = Math.abs(steerTarget) < Math.abs(p.steerAngle);
+    const rate = returning ? 7.0 : 4.5;    // 打满约 0.22s，回正约 0.14s
+    const diff = steerTarget - p.steerAngle;
+    const step = rate * dt;
+    if (Math.abs(diff) <= step) p.steerAngle = steerTarget;
+    else p.steerAngle += Math.sign(diff) * step;
+  }
+
+  // ---------- ② 转向权威曲线：低速弱、高速沉 ----------
+  const lowSpeedRamp = THREE.MathUtils.smoothstep(spAbs, 1.0, 13.0);   // 停车/极低速几乎不转
+  const highSpeedDamp = 1 / (1 + Math.max(0, spAbs - 16) * 0.013);      // 高速转向变"重"
+  let maxYaw = 1.6 * lowSpeedRamp * highSpeedDamp;
+  if (handbrake) maxYaw *= 1.5;
+
+  // ---------- ③ 偏航角速度惯性：车头旋转不是瞬时的 ----------
+  const targetYawRate = p.steerAngle * maxYaw * Math.sign(vF0 || 1);
+  const yawResponse = handbrake ? 4.5 : 6.0;
+  p.yawRate += (targetYawRate - p.yawRate) * Math.min(1, dt * yawResponse);
+  p.heading += p.yawRate * dt;
+
+  // ---------- 速度分解 / 纵向力 ----------
   const fx = Math.sin(p.heading), fz = Math.cos(p.heading);
   const sx = Math.cos(p.heading), sz = -Math.sin(p.heading);
   let vF = p.vx * fx + p.vz * fz;
@@ -765,8 +780,9 @@ function updatePlayer(dt) {
   if (vF > 96) vF = 96;
   if (vF < -14) vF = -14;
 
+  // ---------- 横向抓地 ----------
   const isDrift = handbrake && Math.abs(vF) > 8;
-  const grip = isDrift ? 2.1 : 13.5;
+  const grip = isDrift ? 2.1 : 11.5;
   vS *= Math.exp(-grip * dt);
 
   p.vx = vF * fx + vS * sx;
@@ -774,9 +790,11 @@ function updatePlayer(dt) {
   p.vF = vF; p.vS = vS;
   p.drifting = isDrift && Math.abs(vS) > 2.2;
 
+  // ---------- 位移 ----------
   p.x += p.vx * dt;
   p.z += p.vz * dt;
 
+  // ---------- 赛道约束 ----------
   const idx = findNearest(p.x, p.z, game.lastIdx);
   const dx = p.x - SP[idx].x, dz = p.z - SP[idx].z;
   const lateral = dx * SR[idx].x + dz * SR[idx].z;
@@ -799,6 +817,7 @@ function updatePlayer(dt) {
     }
   }
 
+  // ---------- 圈数检测 ----------
   if (idx > SEG * 0.45 && idx < SEG * 0.56) game.midPassed = true;
   if (game.lastIdx > SEG * 0.82 && idx < SEG * 0.18 && game.midPassed) {
     const lapT = game.time - game.lapStart;
@@ -810,23 +829,28 @@ function updatePlayer(dt) {
   }
   game.lastIdx = idx;
 
+  // ---------- 漂移充能 ----------
   if (p.drifting) game.nitro = Math.min(100, game.nitro + 20 * dt);
 
+  // ---------- 视觉 ----------
   const g = p.group;
   g.position.set(p.x, 0, p.z);
   g.rotation.y = p.heading;
 
-  const targetRoll = -steer * Math.min(1, spAbs / 40) * (isDrift ? 0.11 : 0.055);
+  // 车身侧倾用平滑后的方向盘角度，转弯不再是"啪"一下
+  const targetRoll = -p.steerAngle * Math.min(1, spAbs / 40) * (isDrift ? 0.11 : 0.055);
   const targetPitch = (brake ? 0.035 : 0) - (throttle ? 0.018 : 0);
   p.roll += (targetRoll - p.roll) * Math.min(1, dt * 8);
   p.pitch += (targetPitch - p.pitch) * Math.min(1, dt * 6);
   g.rotation.z = p.roll;
   g.rotation.x = p.pitch;
 
-  const wheelSteer = steer * 0.42 * authority;
+  // 前轮视觉转角跟随平滑方向盘
+  const wheelSteer = p.steerAngle * 0.45;
   p.wheels[0].rotation.y = wheelSteer;
   p.wheels[1].rotation.y = wheelSteer;
 
+  // 烟雾
   if (p.drifting || (p.offTrack && spAbs > 6)) {
     const rx = fx * -1.4, rz = fz * -1.4;
     const emit = Math.ceil(Math.abs(vS) * 0.9) + 1;
@@ -1025,7 +1049,6 @@ function updateHUD(dt) {
   elWarn.style.opacity = (player.offTrack && Math.abs(player.vF) > 4) ? '1' : '0';
   elVig.style.opacity = player.offTrack ? '1' : '0';
 
-  // 氮气按钮在能量不足时变灰
   const shouldDisable = game.nitro < 1;
   if (shouldDisable !== nitroDisabled) {
     nitroDisabled = shouldDisable;
