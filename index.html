@@ -48,6 +48,7 @@
     background: rgba(10,14,20,.5); border: 1px solid rgba(120,180,255,.22); border-radius: 12px;
   }
   
+  /* HUD底部方向盘指示器 */
   #steerWheel {
     position: absolute; left: 50%; bottom: 4px; transform: translateX(-50%);
     width: 92px; height: 92px; pointer-events: none; opacity: .9;
@@ -100,7 +101,7 @@
   
   #trackPicker {
     display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;
-    width: 100%; margin-bottom: 22px; min-height: 120px;
+    width: 100%; margin-bottom: 16px; min-height: 120px;
   }
   .track-card {
     width: 102px; padding: 10px 8px 11px; border-radius: 12px; cursor: pointer;
@@ -116,6 +117,20 @@
   .tc-canvas { width: 70px; height: 70px; display: block; margin: 0 auto 6px; }
   .tc-name { font-size: 12px; font-weight: 700; color: #e6f0ff; letter-spacing: .5px; }
   .tc-desc { font-size: 10px; color: #7f97b5; margin-top: 3px; letter-spacing: .4px; }
+
+  /* 模式切换 */
+  .mode-row {
+    display: flex; gap: 10px; margin-bottom: 22px; align-items: center;
+  }
+  .mode-label { font-size: 13px; color: #a9bfd8; margin-right: 6px; }
+  .mode-btn {
+    background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.15);
+    color: #a9bfd8; border-radius: 8px; padding: 8px 16px; font-size: 13px;
+    font-weight: 600; cursor: pointer; transition: all .15s; touch-action: none;
+  }
+  .mode-btn.active {
+    background: rgba(47,155,255,.25); border-color: #4fa8ff; color: #fff;
+  }
   
   #overlay .keys {
     display: grid; grid-template-columns: auto auto; gap: 8px 20px;
@@ -139,6 +154,8 @@
   /* 触屏按钮 */
   #touchPad { display: none; }
   @media (pointer: coarse) { #touchPad { display: block; } }
+  #touchPad.force-show { display: block !important; }
+
   .tbtn {
     position: absolute; border-radius: 50%; background: rgba(255,255,255,.09);
     border: 1.5px solid rgba(255,255,255,.22);
@@ -148,8 +165,22 @@
   }
   .tbtn.active { background: rgba(120,200,255,.35); border-color: rgba(160,220,255,.7); }
   .tbtn.disabled { opacity: .32; filter: grayscale(1); }
+  
   #tLeft  { left: 16px;  bottom: 100px; width: 70px; height: 70px; }
   #tRight { left: 100px; bottom: 100px; width: 70px; height: 70px; }
+  
+  /* 虚拟方向盘（大号） */
+  #virtualWheel {
+    left: 16px; bottom: 80px; width: 140px; height: 140px;
+    border-radius: 50%; display: none; align-items: center; justify-content: center;
+    border: none; background: transparent; pointer-events: auto; touch-action: none;
+  }
+  #virtualWheel svg {
+    width: 100%; height: 100%; transform-origin: 50% 50%; will-change: transform;
+    filter: drop-shadow(0 4px 12px rgba(0,0,0,.6));
+  }
+  #virtualWheel.active svg { filter: drop-shadow(0 0 16px rgba(120,200,255,.6)); }
+
   #tGas   { right: 16px;  bottom: 100px; width: 78px; height: 78px; font-size: 15px; }
   #tBrake { right: 104px; bottom: 100px; width: 64px; height: 64px; font-size: 15px; }
   #tDrift {
@@ -205,6 +236,16 @@
 </div>
 
 <div id="touchPad">
+  <div class="tbtn" id="virtualWheel">
+    <svg id="vwSvg" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="46" fill="rgba(10,14,20,.55)" stroke="rgba(120,180,255,.28)" stroke-width="2"/>
+      <circle cx="50" cy="50" r="36" fill="none" stroke="rgba(160,215,255,.22)" stroke-width="6"/>
+      <line x1="50" y1="50" x2="50" y2="14" stroke="rgba(170,220,255,.9)" stroke-width="5.5" stroke-linecap="round"/>
+      <line x1="50" y1="50" x2="19" y2="71" stroke="rgba(170,220,255,.9)" stroke-width="5.5" stroke-linecap="round"/>
+      <line x1="50" y1="50" x2="81" y2="71" stroke="rgba(170,220,255,.9)" stroke-width="5.5" stroke-linecap="round"/>
+      <circle cx="50" cy="50" r="10" fill="rgba(120,200,255,.95)"/>
+    </svg>
+  </div>
   <div class="tbtn" id="tLeft">◀</div>
   <div class="tbtn" id="tRight">▶</div>
   <div class="tbtn" id="tGas">油门</div>
@@ -219,6 +260,13 @@
     <div class="sub">WEBGL · 7 TRACKS</div>
     <div id="result"></div>
     <div id="trackPicker"></div>
+    
+    <div class="mode-row">
+      <span class="mode-label">转向模式</span>
+      <button id="modeKeyBtn" class="mode-btn active">按键 (A/D)</button>
+      <button id="modeWheelBtn" class="mode-btn">方向盘拖拽</button>
+    </div>
+
     <div class="keys">
       <span><b>W</b> / <b>↑</b> 油门</span><span><b>S</b> / <b>↓</b> 刹车</span>
       <span><b>A</b> <b>D</b> / <b>←</b> <b>→</b> 方向</span><span><b>Space</b> 漂移</span>
@@ -404,6 +452,14 @@ const TRACK_DEFS = [
 const MAX_STEER_DEG = 45;
 const STEER_RATE_DEG = 110;
 const STEER_RETURN_DEG = 200;
+
+// 模式状态
+let useWheelMode = false;
+let isWheelActive = false;
+let wheelStartX = 0;
+let wheelStartDeg = 0;
+let wheelCurrentDeg = 0;
+const WHEEL_PX = 70; // 拖动70像素打满
 
 // ============================================================
 //  赛道数据（可变）
@@ -794,9 +850,7 @@ function buildVegetation(def) {
   trackGroup.add(mesh);
 }
 
-// ============================================================
-// 修复并放置穿山隧道（起点直道处）
-// ============================================================
+// 生成穿山隧道（起点直道处）
 function buildTunnels(def) {
   if (def.id !== 'bayinbulak') return;
   
@@ -804,19 +858,15 @@ function buildTunnels(def) {
     color: 0x4a554a, roughness: 0.95, side: THREE.DoubleSide, flatShading: true 
   });
   
-  // 半圆拱顶
   const archGeo = new THREE.TorusGeometry(HALF_W + 1.5, 1.2, 8, 16, Math.PI);
-  // 两侧直墙，用来填补拱圈之间的空隙，形成隧道
   const wallGeo = new THREE.BoxGeometry(1.2, HALF_W + 1.5, 4.2);
   
-  // 在刚起步的直道部分修建隧道 (i = 10 到 120)
   for (let i = 10; i < 120; i += 4) {
     const p = SP[i];
     const t = ST[i];
     const r = SR[i];
-    const ang = Math.atan2(t.x, t.z); // 赛道朝向
+    const ang = Math.atan2(t.x, t.z);
     
-    // 1. 顶部半圆拱
     const arch = new THREE.Mesh(archGeo, archMat);
     arch.position.set(p.x, p.y, p.z);
     arch.rotation.y = ang;
@@ -824,10 +874,8 @@ function buildTunnels(def) {
     arch.receiveShadow = true;
     trackGroup.add(arch);
     
-    // 2. 左右侧墙
     for (const side of [-1, 1]) {
       const wall = new THREE.Mesh(wallGeo, archMat);
-      // 放在路边缘
       const wx = p.x + r.x * side * (HALF_W + 1.5);
       const wz = p.z + r.z * side * (HALF_W + 1.5);
       wall.position.set(wx, p.y + (HALF_W + 1.5) / 2, wz);
@@ -998,7 +1046,7 @@ function sampleAt(t) {
 }
 
 // ============================================================
-//  键盘 / 触屏
+//  键盘 / 触屏 / 方向盘
 // ============================================================
 const keys = Object.create(null);
 window.addEventListener('keydown', e => {
@@ -1038,6 +1086,61 @@ window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; }
   glCanvas.addEventListener(ev, e => e.preventDefault(), { passive: false });
 });
 glCanvas.addEventListener('pointerdown', e => e.preventDefault(), { passive: false });
+
+// 虚拟方向盘事件
+const vwContainer = document.getElementById('virtualWheel');
+const vwSvg = document.getElementById('vwSvg');
+
+vwContainer.addEventListener('pointerdown', e => {
+  e.preventDefault(); e.stopPropagation();
+  if (!useWheelMode) return;
+  isWheelActive = true;
+  vwContainer.classList.add('active');
+  vwContainer.setPointerCapture(e.pointerId);
+  wheelStartX = e.clientX;
+  wheelStartDeg = wheelCurrentDeg;
+});
+
+vwContainer.addEventListener('pointermove', e => {
+  if (!isWheelActive) return;
+  e.preventDefault();
+  const dx = e.clientX - wheelStartX;
+  // 向左拖 dx<0，角度变正（左转）；向右拖 dx>0，角度变负（右转）
+  wheelCurrentDeg = Math.max(-MAX_STEER_DEG, Math.min(MAX_STEER_DEG, wheelStartDeg - dx * (MAX_STEER_DEG / WHEEL_PX)));
+});
+
+const releaseWheel = e => {
+  if (!isWheelActive) return;
+  if (e) { e.preventDefault(); e.stopPropagation(); }
+  isWheelActive = false;
+  vwContainer.classList.remove('active');
+  wheelCurrentDeg = 0;
+};
+vwContainer.addEventListener('pointerup', releaseWheel);
+vwContainer.addEventListener('pointercancel', releaseWheel);
+vwContainer.addEventListener('lostpointercapture', releaseWheel);
+
+// 模式切换逻辑
+function setMode(isWheel) {
+  useWheelMode = isWheel;
+  if (isWheel) {
+    document.getElementById('modeWheelBtn').classList.add('active');
+    document.getElementById('modeKeyBtn').classList.remove('active');
+    vwContainer.style.display = 'flex';
+    document.getElementById('tLeft').style.display = 'none';
+    document.getElementById('tRight').style.display = 'none';
+    document.getElementById('touchPad').classList.add('force-show');
+  } else {
+    document.getElementById('modeKeyBtn').classList.add('active');
+    document.getElementById('modeWheelBtn').classList.remove('active');
+    vwContainer.style.display = 'none';
+    document.getElementById('tLeft').style.display = 'flex';
+    document.getElementById('tRight').style.display = 'flex';
+    document.getElementById('touchPad').classList.remove('force-show');
+  }
+}
+document.getElementById('modeKeyBtn').addEventListener('click', () => setMode(false));
+document.getElementById('modeWheelBtn').addEventListener('click', () => setMode(true));
 
 // ============================================================
 //  开始 / 结束
@@ -1102,8 +1205,6 @@ function updatePlayer(dt) {
 
   const throttle = keys.KeyW || keys.ArrowUp;
   const brake = keys.KeyS || keys.ArrowDown;
-  const steerL = keys.KeyA || keys.ArrowLeft;
-  const steerR = keys.KeyD || keys.ArrowRight;
   const handbrake = keys.Space;
   const nitroKey = (keys.ShiftLeft || keys.ShiftRight) && game.nitro > 0.5;
 
@@ -1111,9 +1212,18 @@ function updatePlayer(dt) {
   const vF0 = p.vx * fx0 + p.vz * fz0;
   const spAbs = Math.abs(vF0);
 
-  const steerInput = (steerL ? 1 : 0) - (steerR ? 1 : 0);
-  const targetDeg = steerInput * MAX_STEER_DEG;
-  {
+  // ① 方向盘：融合按键与拖拽
+  let targetDeg = 0;
+  if (useWheelMode) {
+    targetDeg = isWheelActive ? wheelCurrentDeg : 0;
+    // 方向盘模式：强跟手，松手快速回正
+    p.steerDeg += (targetDeg - p.steerDeg) * Math.min(1, dt * 25);
+  } else {
+    const steerL = keys.KeyA || keys.ArrowLeft;
+    const steerR = keys.KeyD || keys.ArrowRight;
+    const steerInput = (steerL ? 1 : 0) - (steerR ? 1 : 0);
+    targetDeg = steerInput * MAX_STEER_DEG;
+    // 按键模式：原有渐进逻辑
     const returning = Math.abs(targetDeg) < Math.abs(p.steerDeg);
     const rate = returning ? STEER_RETURN_DEG : STEER_RATE_DEG;
     const diff = targetDeg - p.steerDeg;
@@ -1121,6 +1231,7 @@ function updatePlayer(dt) {
     if (Math.abs(diff) <= step) p.steerDeg = targetDeg;
     else p.steerDeg += Math.sign(diff) * step;
   }
+  
   const steerNorm = p.steerDeg / MAX_STEER_DEG;
 
   const lowSpeedRamp = THREE.MathUtils.smoothstep(spAbs, 1.0, 13.0);
@@ -1219,7 +1330,6 @@ function updatePlayer(dt) {
       if (newVy > 22) newVy = 22;
       if (newVy < -22) newVy = -22;
       
-      // 软悬挂平滑贴地
       p.y += (groundY - p.y) * Math.min(1, dt * 20);
       p.vy = newVy;
       p.prevY = groundY;
@@ -1251,22 +1361,21 @@ function updatePlayer(dt) {
   g.position.set(p.x, p.y, p.z);
   g.rotation.y = p.heading;
 
-  // 修复：修正车身 Pitch 方向，使上坡抬头、下坡低头，完美贴合赛道坡度
   let targetPitch = (brake ? 0.035 : 0) - (throttle ? 0.018 : 0);
   if (!p.airborne) {
     const lookAhead = Math.min(SEG - 1, idx + 5);
     const lookBehind = Math.max(0, idx - 5);
     const dY = SP[lookAhead].y - SP[lookBehind].y;
     const dXZ = Math.hypot(SP[lookAhead].x - SP[lookBehind].x, SP[lookAhead].z - SP[lookBehind].z) + 0.001;
-    const slope = Math.atan2(dY, dXZ); // 上坡为正
-    targetPitch -= slope; // 绕 X 轴负向旋转才能让 +Z(车头) 抬起
+    const slope = Math.atan2(dY, dXZ);
+    targetPitch -= slope;
   } else {
     targetPitch -= Math.atan2(p.vy, Math.abs(vF) + 4) * 0.5;
   }
 
   const targetRoll = -steerNorm * Math.min(1, spAbs / 40) * (isDrift ? 0.11 : 0.055);
   p.roll += (targetRoll - p.roll) * Math.min(1, dt * 8);
-  p.pitch += (targetPitch - p.pitch) * Math.min(1, dt * 15); // 提高响应速度
+  p.pitch += (targetPitch - p.pitch) * Math.min(1, dt * 15);
   g.rotation.z = p.roll;
   g.rotation.x = p.pitch;
 
@@ -1319,7 +1428,6 @@ function updateAI(dt) {
     const dXZ = Math.hypot(SP[lookAhead].x - SP[lookBehind].x, SP[lookAhead].z - SP[lookBehind].z) + 0.001;
     const slopePitch = Math.atan2(dY, dXZ);
     
-    // AI 也修复了方向
     ai.mesh.rotation.set(-slopePitch, Math.atan2(s.tx, s.tz), 0);
 
     const steerVis = Math.sin(game.time * 0.8 + ai.phase) * 0.06;
@@ -1508,7 +1616,10 @@ function updateHUD(dt) {
   elWarn.style.opacity = (player.offTrack && Math.abs(player.vF) > 4) ? '1' : '0';
   elVig.style.opacity = player.offTrack ? '1' : '0';
 
+  // 两个方向盘指示器同步转动
   if (elSteerSvg) elSteerSvg.style.transform = `rotate(${(-player.steerDeg).toFixed(1)}deg)`;
+  if (vwSvg) vwSvg.style.transform = `rotate(${(-player.steerDeg).toFixed(1)}deg)`;
+  
   if (elSteerDeg) {
     elSteerDeg.textContent = `${player.steerDeg > 0.5 ? '+' : ''}${Math.round(player.steerDeg)}°`;
   }
