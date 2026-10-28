@@ -48,7 +48,6 @@
     background: rgba(10,14,20,.5); border: 1px solid rgba(120,180,255,.22); border-radius: 12px;
   }
   
-  /* HUD底部方向盘指示器 */
   #steerWheel {
     position: absolute; left: 50%; bottom: 4px; transform: translateX(-50%);
     width: 92px; height: 92px; pointer-events: none; opacity: .9;
@@ -82,7 +81,6 @@
   }
   #airTag.on { opacity: 1; transform: translateX(-50%) scale(1); }
   
-  /* 主菜单 */
   #overlay {
     position: fixed; inset: 0; z-index: 10; display: flex; overflow-y: auto;
     background: rgba(8, 14, 24, 0.92);
@@ -118,7 +116,6 @@
   .tc-name { font-size: 12px; font-weight: 700; color: #e6f0ff; letter-spacing: .5px; }
   .tc-desc { font-size: 10px; color: #7f97b5; margin-top: 3px; letter-spacing: .4px; }
 
-  /* 模式切换 */
   .mode-row {
     display: flex; gap: 10px; margin-bottom: 22px; align-items: center;
   }
@@ -151,7 +148,6 @@
   #result { display: none; font-size: 15px; color: #cfe3ff; line-height: 2.1; margin-bottom: 20px; }
   #result b { color: #ffd23f; }
   
-  /* 触屏按钮 */
   #touchPad { display: none; }
   @media (pointer: coarse) { #touchPad { display: block; } }
   #touchPad.force-show { display: block !important; }
@@ -169,7 +165,6 @@
   #tLeft  { left: 16px;  bottom: 100px; width: 70px; height: 70px; }
   #tRight { left: 100px; bottom: 100px; width: 70px; height: 70px; }
   
-  /* 虚拟方向盘（大号） */
   #virtualWheel {
     left: 16px; bottom: 80px; width: 140px; height: 140px;
     border-radius: 50%; display: none; align-items: center; justify-content: center;
@@ -257,7 +252,7 @@
 <div id="overlay">
   <div id="overlayInner">
     <h1>极 速 竞 速</h1>
-    <div class="sub">WEBGL · 7 TRACKS</div>
+    <div class="sub">WEBGL · 9 TRACKS</div>
     <div id="result"></div>
     <div id="trackPicker"></div>
     
@@ -306,7 +301,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fc4ea);
 scene.fog = new THREE.Fog(0x8fc4ea, 280, 680);
 
-const camera = new THREE.PerspectiveCamera(64, innerWidth / innerHeight, 0.1, 2000);
+const camera = new THREE.PerspectiveCamera(64, innerWidth / innerHeight, 0.1, 2500);
 camera.position.set(0, 12, -25);
 
 const hemi = new THREE.HemisphereLight(0xd9ecff, 0x3a4a35, 1.7);
@@ -314,27 +309,79 @@ scene.add(hemi);
 
 const sun = new THREE.DirectionalLight(0xfff4e0, 2.6);
 sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
-sun.shadow.camera.left = -75; sun.shadow.camera.right = 75;
-sun.shadow.camera.top = 75; sun.shadow.camera.bottom = -75;
-sun.shadow.camera.near = 1; sun.shadow.camera.far = 350;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -150; sun.shadow.camera.right = 150;
+sun.shadow.camera.top = 150; sun.shadow.camera.bottom = -150;
+sun.shadow.camera.near = 1; sun.shadow.camera.far = 500;
 sun.shadow.bias = -0.0016;
 scene.add(sun, sun.target);
 
 // ============================================================
-//  地形 / 路径辅助
+//  地形与城市数据结构
 // ============================================================
-function smoothBump(t, center, width) {
-  let d = Math.abs(t - center);
-  if (d > 0.5) d = 1 - d;
-  if (d > width) return 0;
-  return Math.cos((d / width) * Math.PI / 2);
+function getTerrainHeight(x, z) {
+  let y = 0;
+  
+  // 1. 辽宁舰起飞跳台 (x > 200)
+  if (x > 200 && x < 500 && z > -100 && z < 100) {
+    const t = (x - 200) / 300; // 0 到 1
+    y += Math.pow(t, 2.0) * 35.0; // 更高更大
+  }
+  
+  // 2. 连环骆驼峰 (左侧 x < -100)
+  if (x > -800 && x < -100 && z > -200 && z < 200) {
+    const localX = x - (-450);
+    y += Math.sin(localX * 0.04) * Math.cos(z * 0.04) * 12;
+  }
+  
+  // 3. 波浪搓板路 (上方 z < -200)
+  if (z < -200 && z > -800 && x > -300 && x < 300) {
+    y += Math.sin(z * 0.15) * 2.5;
+  }
+  
+  // 4. 大峡谷 (下方 z > 200)
+  if (z > 200 && z < 800 && x > -200 && x < 200) {
+    y -= Math.sin((z-200)/600 * Math.PI) * 18; 
+  }
+  
+  return y;
+}
+
+let buildings = []; // { x, z, w, d, h }
+let ramps = [];     // { x, z, dx, dz, l, w, h }
+
+function addRamp(x, z, dx, dz, length, width, height) {
+  ramps.push({ x, z, dx, dz, l: length, w: width, h: height });
+}
+
+function addBuilding(x, z, w, d, h) {
+  buildings.push({ x, z, w, d, h });
 }
 
 // ============================================================
 //  赛道定义
 // ============================================================
 const TRACK_DEFS = [
+  {
+    id: 'practice', name: '超大练习场', desc: '无限氮气·全地形', accent: '#a855f7',
+    type: 'free',
+    halfWidth: 12,
+    sky: 0x9ec8e8, fog: 0x9ec8e8, fogNear: 400, fogFar: 1500,
+    hemiSky: 0xdde8ff, hemiGround: 0x4a5a3a, hemiInt: 1.8,
+    sunColor: 0xfff8e8, sunInt: 2.7,
+    ground: 0x5a8a42, roadTint: '#3e4348',
+    veg: 'tree', vegColor: 0x4a7a3a,
+    postA: 0x00e5ff, postB: 0xffaa00, postEmissive: 0,
+  },
+  {
+    id: 'city', name: '疯狂城市', desc: '飞车越楼·无限氮气', accent: '#3b82f6',
+    type: 'free',
+    sky: 0x88b8e0, fog: 0x88b8e0, fogNear: 500, fogFar: 2000,
+    hemiSky: 0xd8f0ff, hemiGround: 0x3a4a35, hemiInt: 1.9,
+    sunColor: 0xffffff, sunInt: 2.8,
+    ground: 0x5c6b73, // 柏油路面
+    postA: 0xffffff, postB: 0x3b82f6, postEmissive: 0,
+  },
   {
     id: 'forest', name: '翡翠环道', desc: '均衡弯道', accent: '#4ade80',
     halfWidth: 11,
@@ -453,13 +500,12 @@ const MAX_STEER_DEG = 45;
 const STEER_RATE_DEG = 110;
 const STEER_RETURN_DEG = 200;
 
-// 模式状态
 let useWheelMode = false;
 let isWheelActive = false;
 let wheelStartX = 0;
 let wheelStartDeg = 0;
 let wheelCurrentDeg = 0;
-const WHEEL_PX = 70; // 拖动70像素打满
+const WHEEL_PX = 70; 
 
 // ============================================================
 //  赛道数据（可变）
@@ -471,6 +517,7 @@ let TRACK_LEN = 1500, HALF_W = 11;
 let closed = true;
 let trackGroup = null;
 let currentTrackIdx = 0;
+let isFreeRoam = false;
 
 // ============================================================
 //  车辆模型
@@ -768,6 +815,121 @@ function buildWalls(def) {
 }
 
 function buildGround(def) {
+  if (def.id === 'practice') {
+    // 生成超大练习场地形
+    const size = 3000;
+    const segs = 250; 
+    const geo = new THREE.PlaneGeometry(size, size, segs, segs);
+    geo.rotateX(-Math.PI / 2);
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const vx = pos.getX(i);
+      const vz = pos.getZ(i);
+      pos.setY(i, getTerrainHeight(vx, vz));
+    }
+    geo.computeVertexNormals();
+    
+    const ground = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ 
+      color: def.ground, roughness: 1 
+    }));
+    ground.receiveShadow = true;
+    trackGroup.add(ground);
+    
+    const grid = new THREE.GridHelper(size, 100, 0x88aa88, 0x4a7a5a);
+    grid.position.y = 0.1;
+    trackGroup.add(grid);
+    return;
+  }
+
+  if (def.id === 'city') {
+    // 城市地图
+    const size = 3000;
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(size, size),
+      new THREE.MeshStandardMaterial({ color: def.ground, roughness: 0.9 })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    trackGroup.add(ground);
+    
+    // 城市网格
+    const grid = new THREE.GridHelper(size, 80, 0xffffff, 0xaaaaaa);
+    grid.position.y = 0.05;
+    grid.material.opacity = 0.3;
+    grid.material.transparent = true;
+    trackGroup.add(grid);
+
+    // 中心公园
+    const park = new THREE.Mesh(
+      new THREE.CircleGeometry(250, 32),
+      new THREE.MeshStandardMaterial({ color: 0x4a7a3a, roughness: 1 })
+    );
+    park.rotation.x = -Math.PI / 2;
+    park.position.y = 0.08;
+    park.receiveShadow = true;
+    trackGroup.add(park);
+
+    // 生成楼房矩阵
+    buildings = [];
+    ramps = [];
+    const gridGap = 180;
+    for (let gx = -1200; gx <= 1200; gx += gridGap) {
+      for (let gz = -1200; gz <= 1200; gz += gridGap) {
+        if (Math.hypot(gx, gz) < 320) continue; // 公园
+        if (Math.random() < 0.2) continue; // 随机留空
+        
+        const bw = 60 + Math.random() * 40;
+        const bd = 60 + Math.random() * 40;
+        const bh = 40 + Math.random() * 160;
+        addBuilding(gx, gz, bw, bd, bh);
+      }
+    }
+
+    // 设计几个标志性的坡道与飞跃楼
+    // 1. 中心公园直通南方的超级斜坡，飞向一栋楼
+    addBuilding(0, 750, 100, 100, 120);
+    addRamp(0, 400, 0, 1, 250, 40, 120);
+    
+    // 2. 西侧的高空飞车点
+    addBuilding(-800, 0, 120, 120, 80);
+    addRamp(-550, 0, 1, 0, 250, 40, 80);
+    addBuilding(-150, 0, 120, 120, 60);
+
+    // 渲染楼房
+    const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+    const boxMat = new THREE.MeshStandardMaterial({ color: 0x6a7b8e, roughness: 0.8 });
+    const bMesh = new THREE.InstancedMesh(boxGeo, boxMat, buildings.length);
+    bMesh.castShadow = true;
+    bMesh.receiveShadow = true;
+    const dummy = new THREE.Object3D();
+    
+    buildings.forEach((b, i) => {
+      dummy.position.set(b.x, b.h / 2, b.z);
+      dummy.scale.set(b.w, b.h, b.d);
+      dummy.updateMatrix();
+      bMesh.setMatrixAt(i, dummy.matrix);
+    });
+    trackGroup.add(bMesh);
+
+    // 渲染坡道
+    const rampMat = new THREE.MeshStandardMaterial({ color: 0xff8800, roughness: 0.5, metalness: 0.5 });
+    ramps.forEach(r => {
+      const geo = new THREE.BoxGeometry(r.w, 1.5, Math.hypot(r.l, r.h));
+      const mesh = new THREE.Mesh(geo, rampMat);
+      const midX = r.x + r.dx * r.l / 2;
+      const midZ = r.z + r.dz * r.l / 2;
+      mesh.position.set(midX, r.h / 2, midZ);
+      const angle = Math.atan2(r.dx, r.dz);
+      mesh.rotation.y = angle;
+      mesh.rotation.x = -Math.atan2(r.h, r.l);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      trackGroup.add(mesh);
+    });
+
+    return;
+  }
+
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(4000, 4000),
     new THREE.MeshStandardMaterial({ color: def.ground, roughness: 1 })
@@ -779,6 +941,8 @@ function buildGround(def) {
 }
 
 function buildPosts(def) {
+  if (def.type === 'free') return;
+
   const gap = 14;
   const perSide = Math.floor(TRACK_LEN / gap);
   const step = Math.max(1, Math.floor(SEG / perSide));
@@ -809,6 +973,8 @@ function buildPosts(def) {
 }
 
 function buildVegetation(def) {
+  if (def.type === 'free') return; 
+
   const isRock = def.veg === 'rock';
   const COUNT = isRock ? 220 : 340;
   let geo;
@@ -850,7 +1016,6 @@ function buildVegetation(def) {
   trackGroup.add(mesh);
 }
 
-// 生成穿山隧道（起点直道处）
 function buildTunnels(def) {
   if (def.id !== 'bayinbulak') return;
   
@@ -906,77 +1071,88 @@ function buildTrack(def) {
   HALF_W = def.halfWidth;
   closed = def.closed !== false;
 
-  const pts = [];
-  if (def.pathCommands) {
-    const dense = turtlePath(def.pathCommands, 3);
-    for (const [x, z] of dense) pts.push(new THREE.Vector3(x, 0, z));
-  } else if (def.pathPoints) {
-    for (const pt of def.pathPoints) {
-      if (pt.length === 3) pts.push(new THREE.Vector3(pt[0], pt[1], pt[2]));
-      else pts.push(new THREE.Vector3(pt[0], 0, pt[1]));
-    }
+  isFreeRoam = (def.type === 'free');
+
+  if (isFreeRoam) {
+    buildGround(def);
+    game.totalLaps = 9999;
+    document.getElementById('info').style.display = 'none';
+    document.getElementById('minimap').style.display = 'none';
   } else {
-    const CN = 48;
-    for (let i = 0; i < CN; i++) {
-      const a = (i / CN) * Math.PI * 2;
-      const r = def.profile(a);
-      pts.push(new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r));
+    document.getElementById('info').style.display = 'block';
+    document.getElementById('minimap').style.display = 'block';
+
+    const pts = [];
+    if (def.pathCommands) {
+      const dense = turtlePath(def.pathCommands, 3);
+      for (const [x, z] of dense) pts.push(new THREE.Vector3(x, 0, z));
+    } else if (def.pathPoints) {
+      for (const pt of def.pathPoints) {
+        if (pt.length === 3) pts.push(new THREE.Vector3(pt[0], pt[1], pt[2]));
+        else pts.push(new THREE.Vector3(pt[0], 0, pt[1]));
+      }
+    } else {
+      const CN = 48;
+      for (let i = 0; i < CN; i++) {
+        const a = (i / CN) * Math.PI * 2;
+        const r = def.profile(a);
+        pts.push(new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r));
+      }
     }
-  }
-  const curveType = def.pathCommands ? 'centripetal' : 'catmullrom';
-  const curve = new THREE.CatmullRomCurve3(pts, closed, curveType, 0.5);
-  curve.arcLengthDivisions = 5000;
-  TRACK_LEN = curve.getLength();
+    const curveType = def.pathCommands ? 'centripetal' : 'catmullrom';
+    const curve = new THREE.CatmullRomCurve3(pts, closed, curveType, 0.5);
+    curve.arcLengthDivisions = 5000;
+    TRACK_LEN = curve.getLength();
 
-  const elevFn = def.elevation || null;
+    const elevFn = def.elevation || null;
 
-  SP = new Array(SEG); ST = new Array(SEG); SR = new Array(SEG);
-  for (let i = 0; i < SEG; i++) {
-    const tt = closed ? i / SEG : i / (SEG - 1);
-    const p = curve.getPointAt(tt);
-    const tan = curve.getTangentAt(tt).normalize();
-    
-    const flatTan = new THREE.Vector3(tan.x, 0, tan.z).normalize();
-    const r = new THREE.Vector3().crossVectors(flatTan, UP).normalize();
-    
-    if (elevFn) p.y = elevFn(tt);
-    
-    SP[i] = p; ST[i] = tan; SR[i] = r;
-  }
-  CURV = new Float32Array(SEG);
-  for (let i = 0; i < SEG; i++) CURV[i] = ST[i].angleTo(ST[(i + 1) % SEG]);
-
-  if (closed) {
-    let startIdx = 0, bestC = Infinity;
+    SP = new Array(SEG); ST = new Array(SEG); SR = new Array(SEG);
     for (let i = 0; i < SEG; i++) {
-      let c = 0;
-      for (let j = -20; j <= 20; j++) c += CURV[(i + j + SEG) % SEG];
-      if (c < bestC) { bestC = c; startIdx = i; }
+      const tt = closed ? i / SEG : i / (SEG - 1);
+      const p = curve.getPointAt(tt);
+      const tan = curve.getTangentAt(tt).normalize();
+      
+      const flatTan = new THREE.Vector3(tan.x, 0, tan.z).normalize();
+      const r = new THREE.Vector3().crossVectors(flatTan, UP).normalize();
+      
+      if (elevFn) p.y = elevFn(tt);
+      
+      SP[i] = p; ST[i] = tan; SR[i] = r;
     }
-    if (startIdx !== 0) rotateArrays(startIdx);
+    CURV = new Float32Array(SEG);
+    for (let i = 0; i < SEG; i++) CURV[i] = ST[i].angleTo(ST[(i + 1) % SEG]);
+
+    if (closed) {
+      let startIdx = 0, bestC = Infinity;
+      for (let i = 0; i < SEG; i++) {
+        let c = 0;
+        for (let j = -20; j <= 20; j++) c += CURV[(i + j + SEG) % SEG];
+        if (c < bestC) { bestC = c; startIdx = i; }
+      }
+      if (startIdx !== 0) rotateArrays(startIdx);
+    }
+
+    buildRoadMesh(def);
+    buildWalls(def);
+    buildGround(def);
+    buildPosts(def);
+    buildVegetation(def);
+    buildTunnels(def);
+
+    if (def.id === 'bayinbulak') {
+      const mGeo = new THREE.ConeGeometry(260, 200, 64);
+      mGeo.translate(0, 80, 0);
+      const mMat = new THREE.MeshStandardMaterial({ color: 0x4a6a4a, flatShading: true, roughness: 1 });
+      const mountain = new THREE.Mesh(mGeo, mMat);
+      mountain.position.set(0, -20, 0);
+      mountain.receiveShadow = true;
+      mountain.castShadow = true;
+      trackGroup.add(mountain);
+    }
+
+    game.totalLaps = def.laps || Math.max(2, Math.min(4, Math.round(4200 / TRACK_LEN)));
+    computeMapTransform();
   }
-
-  buildRoadMesh(def);
-  buildWalls(def);
-  buildGround(def);
-  buildPosts(def);
-  buildVegetation(def);
-  buildTunnels(def);
-
-  if (def.id === 'bayinbulak') {
-    const mGeo = new THREE.ConeGeometry(260, 200, 64);
-    mGeo.translate(0, 80, 0);
-    const mMat = new THREE.MeshStandardMaterial({ color: 0x4a6a4a, flatShading: true, roughness: 1 });
-    const mountain = new THREE.Mesh(mGeo, mMat);
-    mountain.position.set(0, -20, 0);
-    mountain.receiveShadow = true;
-    mountain.castShadow = true;
-    trackGroup.add(mountain);
-  }
-
-  game.totalLaps = def.laps || Math.max(2, Math.min(4, Math.round(4200 / TRACK_LEN)));
-
-  computeMapTransform();
 
   for (let i = 0; i < SMOKE_MAX; i++) { particles[i].life = 0; smokeAlpha[i] = 0; }
 
@@ -984,14 +1160,23 @@ function buildTrack(def) {
 }
 
 function resetPose() {
-  const i0 = 8;
-  player.x = SP[i0].x;
-  player.z = SP[i0].z;
-  player.y = SP[i0].y;
+  if (isFreeRoam) {
+    player.x = 0; 
+    player.z = 0;
+    if (currentTrackIdx === 0) player.y = getTerrainHeight(0, 0);
+    else player.y = 0;
+    player.heading = Math.PI / 2;
+  } else {
+    const i0 = 8;
+    player.x = SP[i0].x;
+    player.z = SP[i0].z;
+    player.y = SP[i0].y;
+    player.heading = Math.atan2(ST[i0].x, ST[i0].z);
+  }
+  
   player.prevY = player.y;
   player.vy = 0;
   player.airborne = false;
-  player.heading = Math.atan2(ST[i0].x, ST[i0].z);
   player.vx = 0; player.vz = 0;
   player.vF = 0; player.vS = 0;
   player.roll = 0; player.pitch = 0;
@@ -1000,13 +1185,51 @@ function resetPose() {
   player.group.position.set(player.x, player.y, player.z);
   player.group.rotation.set(0, player.heading, 0);
 
-  game.lastIdx = i0;
+  game.lastIdx = 0;
   game.lap = 1;
   game.rank = 1;
 
   const fx = Math.sin(player.heading), fz = Math.cos(player.heading);
   camera.position.set(player.x - fx * 12, player.y + 6, player.z - fz * 12);
   camera.lookAt(player.x, player.y + 1.5, player.z);
+}
+
+// ============================================================
+//  自由模式物理工具函数
+// ============================================================
+function getGroundHeight(x, z, currentY) {
+  let gY = 0;
+  
+  if (currentTrackIdx === 0) {
+    gY = getTerrainHeight(x, z);
+  } else if (currentTrackIdx === 1) {
+    // 城市
+    gY = 0;
+    for (const r of ramps) {
+      const localX = x - r.x;
+      const localZ = z - r.z;
+      const along = localX * r.dx + localZ * r.dz;
+      const across = -localX * r.dz + localZ * r.dx;
+      if (along >= 0 && along <= r.l && Math.abs(across) <= r.w / 2) {
+        const rampY = (along / r.l) * r.h;
+        if (currentY >= rampY - 0.5) {
+          gY = Math.max(gY, rampY);
+        }
+      }
+    }
+    for (const b of buildings) {
+      const halfW = b.w / 2;
+      const halfD = b.d / 2;
+      const dx = x - b.x;
+      const dz = z - b.z;
+      if (Math.abs(dx) < halfW && Math.abs(dz) < halfD) {
+        if (currentY >= b.h - 0.5) {
+          gY = Math.max(gY, b.h);
+        }
+      }
+    }
+  }
+  return gY;
 }
 
 // ============================================================
@@ -1026,23 +1249,6 @@ function findNearest(x, y, z, from) {
     if (d < bestD) { bestD = d; best = k; }
   }
   return best;
-}
-
-function sampleAt(t) {
-  let tt;
-  if (closed) tt = ((t % 1) + 1) % 1;
-  else tt = Math.max(0, Math.min(1, t));
-  const ft = tt * SEG;
-  const i0 = Math.min(SEG - 1, Math.floor(ft));
-  const i1 = closed ? (i0 + 1) % SEG : Math.min(SEG - 1, i0 + 1);
-  const f = ft - Math.floor(ft);
-  const px = SP[i0].x + (SP[i1].x - SP[i0].x) * f;
-  const pz = SP[i0].z + (SP[i1].z - SP[i0].z) * f;
-  const py = SP[i0].y + (SP[i1].y - SP[i0].y) * f;
-  let tx = ST[i0].x + (ST[i1].x - ST[i0].x) * f;
-  let tz = ST[i0].z + (ST[i1].z - ST[i0].z) * f;
-  const L = Math.hypot(tx, tz) || 1; tx /= L; tz /= L;
-  return { px, pz, py, tx, tz };
 }
 
 // ============================================================
@@ -1087,7 +1293,6 @@ window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; }
 });
 glCanvas.addEventListener('pointerdown', e => e.preventDefault(), { passive: false });
 
-// 虚拟方向盘事件
 const vwContainer = document.getElementById('virtualWheel');
 const vwSvg = document.getElementById('vwSvg');
 
@@ -1105,7 +1310,6 @@ vwContainer.addEventListener('pointermove', e => {
   if (!isWheelActive) return;
   e.preventDefault();
   const dx = e.clientX - wheelStartX;
-  // 向左拖 dx<0，角度变正（左转）；向右拖 dx>0，角度变负（右转）
   wheelCurrentDeg = Math.max(-MAX_STEER_DEG, Math.min(MAX_STEER_DEG, wheelStartDeg - dx * (MAX_STEER_DEG / WHEEL_PX)));
 });
 
@@ -1120,7 +1324,6 @@ vwContainer.addEventListener('pointerup', releaseWheel);
 vwContainer.addEventListener('pointercancel', releaseWheel);
 vwContainer.addEventListener('lostpointercapture', releaseWheel);
 
-// 模式切换逻辑
 function setMode(isWheel) {
   useWheelMode = isWheel;
   if (isWheel) {
@@ -1146,7 +1349,7 @@ document.getElementById('modeWheelBtn').addEventListener('click', () => setMode(
 //  开始 / 结束
 // ============================================================
 function startRace() {
-  if (!SP) return;
+  if (!isFreeRoam && !SP) return;
   resetPose();
 
   game.running = true;
@@ -1163,7 +1366,7 @@ function startRace() {
     ai.speed = 0;
     ai.offset = (i % 2 ? 1 : -1) * 4.2;
     ai.finished = false;
-    ai.mesh.visible = true;
+    ai.mesh.visible = !isFreeRoam;
   });
 
   document.getElementById('overlay').classList.add('hide');
@@ -1171,7 +1374,7 @@ function startRace() {
 }
 
 function finishRace() {
-  if (game.finished) return;
+  if (game.finished || isFreeRoam) return;
   game.running = false;
   game.finished = true;
   const el = document.getElementById('overlay');
@@ -1206,24 +1409,21 @@ function updatePlayer(dt) {
   const throttle = keys.KeyW || keys.ArrowUp;
   const brake = keys.KeyS || keys.ArrowDown;
   const handbrake = keys.Space;
-  const nitroKey = (keys.ShiftLeft || keys.ShiftRight) && game.nitro > 0.5;
+  const nitroKey = (keys.ShiftLeft || keys.ShiftRight) && (isFreeRoam || game.nitro > 0.5);
 
   const fx0 = Math.sin(p.heading), fz0 = Math.cos(p.heading);
   const vF0 = p.vx * fx0 + p.vz * fz0;
   const spAbs = Math.abs(vF0);
 
-  // ① 方向盘：融合按键与拖拽
   let targetDeg = 0;
   if (useWheelMode) {
     targetDeg = isWheelActive ? wheelCurrentDeg : 0;
-    // 方向盘模式：强跟手，松手快速回正
     p.steerDeg += (targetDeg - p.steerDeg) * Math.min(1, dt * 25);
   } else {
     const steerL = keys.KeyA || keys.ArrowLeft;
     const steerR = keys.KeyD || keys.ArrowRight;
     const steerInput = (steerL ? 1 : 0) - (steerR ? 1 : 0);
     targetDeg = steerInput * MAX_STEER_DEG;
-    // 按键模式：原有渐进逻辑
     const returning = Math.abs(targetDeg) < Math.abs(p.steerDeg);
     const rate = returning ? STEER_RETURN_DEG : STEER_RATE_DEG;
     const diff = targetDeg - p.steerDeg;
@@ -1250,17 +1450,50 @@ function updatePlayer(dt) {
   let vF = p.vx * fx + p.vz * fz;
   let vS = p.vx * sx + p.vz * sz;
 
+  let groundY, slope;
+  const wheelBase = 2.8;
+  
+  if (isFreeRoam) {
+    const frontX = p.x + fx * (wheelBase / 2);
+    const frontZ = p.z + fz * (wheelBase / 2);
+    const backX = p.x - fx * (wheelBase / 2);
+    const backZ = p.z - fz * (wheelBase / 2);
+    
+    const yF = getGroundHeight(frontX, frontZ, p.y);
+    const yB = getGroundHeight(backX, backZ, p.y);
+    slope = Math.atan2(yF - yB, wheelBase);
+    groundY = getGroundHeight(p.x, p.z, p.y);
+  } else {
+    const idx = findNearest(p.x, p.y, p.z, game.lastIdx);
+    const frontX = p.x + fx * (wheelBase / 2);
+    const frontZ = p.z + fz * (wheelBase / 2);
+    const backX = p.x - fx * (wheelBase / 2);
+    const backZ = p.z - fz * (wheelBase / 2);
+    
+    const frontIdx = findNearest(frontX, p.y, frontZ, idx);
+    const backIdx = findNearest(backX, p.y, backZ, idx);
+    
+    const yF = SP[frontIdx].y;
+    const yB = SP[backIdx].y;
+    slope = Math.atan2(yF - yB, wheelBase);
+    groundY = SP[idx].y;
+  }
+
+  const gravityAlongSlope = -15 * Math.sin(slope);
+
   let accel = 0;
   if (!p.airborne) {
     if (throttle) accel += ENGINE * Math.max(0, 1 - Math.max(0, vF) / MAX_SPEED);
     if (nitroKey) {
       accel += 26 * Math.max(0, 1 - Math.max(0, vF) / (MAX_SPEED * 1.18));
-      game.nitro = Math.max(0, game.nitro - 30 * dt);
+      if (!isFreeRoam) game.nitro = Math.max(0, game.nitro - 30 * dt);
+      else game.nitro = 100;
     }
     if (brake) {
       if (vF > 0.4) accel -= BRAKE_POWER;
       else accel -= 9;
     }
+    accel += gravityAlongSlope;
   }
   accel -= vF * LINEAR_DRAG;
   vF += accel * dt;
@@ -1279,30 +1512,61 @@ function updatePlayer(dt) {
   p.x += p.vx * dt;
   p.z += p.vz * dt;
 
-  const idx = findNearest(p.x, p.y, p.z, game.lastIdx);
-  const dx = p.x - SP[idx].x, dz = p.z - SP[idx].z;
-  const lateral = dx * SR[idx].x + dz * SR[idx].z;
-  const over = Math.abs(lateral) - (HALF_W - 0.6);
+  if (!isFreeRoam) {
+    // 赛道约束
+    const idx = findNearest(p.x, p.y, p.z, game.lastIdx);
+    const dx = p.x - SP[idx].x, dz = p.z - SP[idx].z;
+    const lateral = dx * SR[idx].x + dz * SR[idx].z;
+    const over = Math.abs(lateral) - (HALF_W - 0.6);
 
-  p.offTrack = over > 0 && !p.airborne;
-  if (over > 0) {
-    const slow = Math.exp(-1.5 * dt);
-    p.vx *= slow; p.vz *= slow;
-  }
-  if (Math.abs(lateral) > HALF_W + 5.5) {
-    const push = Math.abs(lateral) - (HALF_W + 5.5);
-    const sg = Math.sign(lateral);
-    p.x -= SR[idx].x * push * sg;
-    p.z -= SR[idx].z * push * sg;
-    const vOut = p.vx * SR[idx].x * sg + p.vz * SR[idx].z * sg;
-    if (vOut > 0) {
-      p.vx -= SR[idx].x * sg * vOut;
-      p.vz -= SR[idx].z * sg * vOut;
+    p.offTrack = over > 0 && !p.airborne;
+    if (over > 0) {
+      const slow = Math.exp(-1.5 * dt);
+      p.vx *= slow; p.vz *= slow;
+    }
+    if (Math.abs(lateral) > HALF_W + 5.5) {
+      const push = Math.abs(lateral) - (HALF_W + 5.5);
+      const sg = Math.sign(lateral);
+      p.x -= SR[idx].x * push * sg;
+      p.z -= SR[idx].z * push * sg;
+      const vOut = p.vx * SR[idx].x * sg + p.vz * SR[idx].z * sg;
+      if (vOut > 0) {
+        p.vx -= SR[idx].x * sg * vOut;
+        p.vz -= SR[idx].z * sg * vOut;
+      }
+    }
+    game.lastIdx = idx;
+  } else {
+    p.offTrack = false;
+    // 城市楼房碰撞
+    if (currentTrackIdx === 1 && !p.airborne) {
+      for (const b of buildings) {
+        if (p.y >= b.h - 0.5) continue;
+        const halfW = b.w / 2;
+        const halfD = b.d / 2;
+        const dx = p.x - b.x;
+        const dz = p.z - b.z;
+        const radius = 1.5;
+        
+        if (Math.abs(dx) < halfW + radius && Math.abs(dz) < halfD + radius) {
+          const overlapX = halfW + radius - Math.abs(dx);
+          const overlapZ = halfD + radius - Math.abs(dz);
+          
+          if (overlapX < overlapZ) {
+            const sign = Math.sign(dx);
+            p.x += sign * overlapX;
+            if (p.vx * sign < 0) p.vx *= -0.3;
+          } else {
+            const sign = Math.sign(dz);
+            p.z += sign * overlapZ;
+            if (p.vz * sign < 0) p.vz *= -0.3;
+          }
+        }
+      }
     }
   }
 
-  const groundY = SP[idx].y;
-  
+  // 垂直物理
   if (p.airborne) {
     p.vy -= GRAVITY * dt;
     p.y += p.vy * dt;
@@ -1317,45 +1581,40 @@ function updatePlayer(dt) {
       p.prevY = groundY;
     }
   } else {
-    const physY = p.y + p.vy * dt - 0.5 * GRAVITY * dt * dt;
-    
-    if (physY > groundY + 0.12 && Math.abs(vF) > 8) {
+    if (p.y > groundY + 0.25 && Math.abs(vF) > 6) {
       p.airborne = true;
-      p.y = physY;
-      p.vy = p.vy - GRAVITY * dt;
+      const dY = groundY - p.prevY;
+      p.vy = Math.max(0, dY / dt * 0.8);
+      p.y += p.vy * dt;
     } else {
-      const dy = groundY - p.prevY;
-      let newVy = dt > 1e-6 ? dy / dt : 0;
-      if (Math.abs(vF) < 5) newVy = 0;
-      if (newVy > 22) newVy = 22;
-      if (newVy < -22) newVy = -22;
-      
-      p.y += (groundY - p.y) * Math.min(1, dt * 20);
-      p.vy = newVy;
+      p.y = groundY;
+      p.vy = 0;
       p.prevY = groundY;
     }
   }
 
-  if (closed) {
-    if (idx > SEG * 0.45 && idx < SEG * 0.56) game.midPassed = true;
-    if (game.lastIdx > SEG * 0.82 && idx < SEG * 0.18 && game.midPassed) {
-      const lapT = game.time - game.lapStart;
-      game.lapStart = game.time;
-      if (!game.bestLap || lapT < game.bestLap) game.bestLap = lapT;
-      game.lap++;
-      game.midPassed = false;
-      if (game.lap > game.totalLaps) { game.lap = game.totalLaps; finishRace(); }
-    }
-  } else {
-    if (game.lastIdx < SEG * 0.98 && idx >= SEG * 0.98) {
-      game.lap = game.totalLaps + 1;
-      finishRace();
-      return;
+  // 圈数计算 (仅赛道模式)
+  if (!isFreeRoam) {
+    if (closed) {
+      if (game.lastIdx > SEG * 0.45 && game.lastIdx < SEG * 0.56) game.midPassed = true;
+      if (game.lastIdx > SEG * 0.82 && game.lastIdx < SEG * 0.18 && game.midPassed) {
+        const lapT = game.time - game.lapStart;
+        game.lapStart = game.time;
+        if (!game.bestLap || lapT < game.bestLap) game.bestLap = lapT;
+        game.lap++;
+        game.midPassed = false;
+        if (game.lap > game.totalLaps) { game.lap = game.totalLaps; finishRace(); }
+      }
+    } else {
+      if (game.lastIdx < SEG * 0.98 && game.lastIdx >= SEG * 0.98) {
+        game.lap = game.totalLaps + 1;
+        finishRace();
+        return;
+      }
     }
   }
-  game.lastIdx = idx;
 
-  if (p.drifting) game.nitro = Math.min(100, game.nitro + 20 * dt);
+  if (p.drifting && !isFreeRoam) game.nitro = Math.min(100, game.nitro + 20 * dt);
 
   const g = p.group;
   g.position.set(p.x, p.y, p.z);
@@ -1363,11 +1622,6 @@ function updatePlayer(dt) {
 
   let targetPitch = (brake ? 0.035 : 0) - (throttle ? 0.018 : 0);
   if (!p.airborne) {
-    const lookAhead = Math.min(SEG - 1, idx + 5);
-    const lookBehind = Math.max(0, idx - 5);
-    const dY = SP[lookAhead].y - SP[lookBehind].y;
-    const dXZ = Math.hypot(SP[lookAhead].x - SP[lookBehind].x, SP[lookAhead].z - SP[lookBehind].z) + 0.001;
-    const slope = Math.atan2(dY, dXZ);
     targetPitch -= slope;
   } else {
     targetPitch -= Math.atan2(p.vy, Math.abs(vF) + 4) * 0.5;
@@ -1375,7 +1629,7 @@ function updatePlayer(dt) {
 
   const targetRoll = -steerNorm * Math.min(1, spAbs / 40) * (isDrift ? 0.11 : 0.055);
   p.roll += (targetRoll - p.roll) * Math.min(1, dt * 8);
-  p.pitch += (targetPitch - p.pitch) * Math.min(1, dt * 15);
+  p.pitch += (targetPitch - p.pitch) * Math.min(1, dt * 25);
   g.rotation.z = p.roll;
   g.rotation.x = p.pitch;
 
@@ -1397,7 +1651,11 @@ function updatePlayer(dt) {
 //  AI
 // ============================================================
 function updateAI(dt) {
+  if (isFreeRoam) return;
+
   for (const ai of AIS) {
+    if (!ai.mesh.visible) continue; 
+
     if (!closed && ai.t >= 1) {
       if (!ai.finished) { ai.finished = true; ai.mesh.visible = false; }
       continue;
@@ -1422,13 +1680,12 @@ function updateAI(dt) {
     ai.mesh.position.set(ai.x, ai.y, ai.z);
     
     const aiK = Math.min(SEG - 1, Math.floor(tMod * SEG));
-    const lookAhead = Math.min(SEG - 1, aiK + 5);
-    const lookBehind = Math.max(0, aiK - 5);
-    const dY = SP[lookAhead].y - SP[lookBehind].y;
-    const dXZ = Math.hypot(SP[lookAhead].x - SP[lookBehind].x, SP[lookAhead].z - SP[lookBehind].z) + 0.001;
-    const slopePitch = Math.atan2(dY, dXZ);
+    const aiFx = Math.sin(ai.mesh.rotation.y), aiFz = Math.cos(ai.mesh.rotation.y);
+    const aiFrontIdx = findNearest(ai.x + aiFx * 1.4, ai.y, ai.z + aiFz * 1.4, aiK);
+    const aiBackIdx = findNearest(ai.x - aiFx * 1.4, ai.y, ai.z - aiFz * 1.4, aiK);
+    const aiSlope = Math.atan2(SP[aiFrontIdx].y - SP[aiBackIdx].y, 2.8);
     
-    ai.mesh.rotation.set(-slopePitch, Math.atan2(s.tx, s.tz), 0);
+    ai.mesh.rotation.set(-aiSlope, Math.atan2(s.tx, s.tz), 0);
 
     const steerVis = Math.sin(game.time * 0.8 + ai.phase) * 0.06;
     ai.wheels[0].rotation.y = steerVis;
@@ -1454,6 +1711,10 @@ function updateAI(dt) {
 //  排名
 // ============================================================
 function computeRank() {
+  if (isFreeRoam) {
+    game.rank = 1;
+    return;
+  }
   const playerProg = closed
     ? (game.lap - 1) + (game.lastIdx / SEG)
     : game.lastIdx / SEG;
@@ -1533,7 +1794,7 @@ function mx(x) { return x * mapScale + mapOX; }
 function mz(z) { return z * mapScale + mapOZ; }
 
 function drawMap() {
-  if (!SP) return;
+  if (!SP || isFreeRoam) return;
   mctx.clearRect(0, 0, MAP_W, MAP_W);
 
   mctx.beginPath();
@@ -1610,13 +1871,18 @@ function updateHUD(dt) {
   else if (kmh > 60) gear = 'CRUISE';
   elGear.textContent = gear;
 
-  elNitro.style.width = game.nitro.toFixed(1) + '%';
+  if (isFreeRoam) {
+    elNitro.style.width = '100%';
+  } else {
+    elNitro.style.width = game.nitro.toFixed(1) + '%';
+  }
+  
   elDrift.classList.toggle('on', player.drifting);
   elAir.classList.toggle('on', player.airborne);
-  elWarn.style.opacity = (player.offTrack && Math.abs(player.vF) > 4) ? '1' : '0';
-  elVig.style.opacity = player.offTrack ? '1' : '0';
+  
+  elWarn.style.opacity = '0';
+  elVig.style.opacity = '0';
 
-  // 两个方向盘指示器同步转动
   if (elSteerSvg) elSteerSvg.style.transform = `rotate(${(-player.steerDeg).toFixed(1)}deg)`;
   if (vwSvg) vwSvg.style.transform = `rotate(${(-player.steerDeg).toFixed(1)}deg)`;
   
@@ -1624,7 +1890,7 @@ function updateHUD(dt) {
     elSteerDeg.textContent = `${player.steerDeg > 0.5 ? '+' : ''}${Math.round(player.steerDeg)}°`;
   }
 
-  const shouldDisable = game.nitro < 1;
+  const shouldDisable = !isFreeRoam && game.nitro < 1;
   if (shouldDisable !== nitroDisabled) {
     nitroDisabled = shouldDisable;
     elNitroBtn.classList.toggle('disabled', shouldDisable);
@@ -1632,10 +1898,12 @@ function updateHUD(dt) {
 
   if (hudTick > 0.06) {
     hudTick = 0;
-    elLap.textContent = `${Math.min(game.lap, game.totalLaps)}/${game.totalLaps}`;
-    elPos.textContent = `${game.rank}/4`;
-    elCur.textContent = (game.time - game.lapStart).toFixed(2);
-    elBest.textContent = game.bestLap ? game.bestLap.toFixed(2) : '--';
+    if (!isFreeRoam) {
+      elLap.textContent = `${Math.min(game.lap, game.totalLaps)}/${game.totalLaps}`;
+      elPos.textContent = `${game.rank}/4`;
+      elCur.textContent = (game.time - game.lapStart).toFixed(2);
+      elBest.textContent = game.bestLap ? game.bestLap.toFixed(2) : '--';
+    }
   }
 }
 
@@ -1693,6 +1961,8 @@ function drawPreview(canvas, def) {
     } else {
       pts = def.pathPoints.map(p => [p[0], p[1]]);
     }
+  } else if (def.id === 'practice' || def.id === 'city') {
+    pts = [[-50,-50], [50,-50], [50,50], [-50,50]];
   } else {
     pts = [];
     const N = 320;
@@ -1719,7 +1989,7 @@ function drawPreview(canvas, def) {
     if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
   }
   const isOpen = def.pathCommands || def.pathPoints;
-  if (!isOpen) ctx.closePath();
+  if (!isOpen && def.id !== 'practice' && def.id !== 'city') ctx.closePath();
   ctx.strokeStyle = def.accent;
   ctx.lineWidth = 9;
   ctx.lineJoin = 'round';
@@ -1771,7 +2041,7 @@ TRACK_DEFS.forEach((def, i) => {
 
 function selectTrack(i) {
   if (game.running) return;
-  if (i === currentTrackIdx && SP) return;
+  if (i === currentTrackIdx && (SP || isFreeRoam)) return;
   currentTrackIdx = i;
   cards.forEach((c, k) => c.classList.toggle('active', k === i));
   buildTrack(TRACK_DEFS[i]);
@@ -1780,7 +2050,7 @@ function selectTrack(i) {
   document.getElementById('startBtn').textContent = '开始比赛';
 }
 
-selectTrack(0);
+selectTrack(0); // 默认选中练习场
 
 requestAnimationFrame(loop);
 
